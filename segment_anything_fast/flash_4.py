@@ -228,7 +228,8 @@ def _load_best_configs():
     if not device_name.startswith('NVIDIA A100'):
         print("Warning: Custom flash attention kernels were written specifically for A100.")
     import importlib
-    saved_configs = importlib.resources.files("segment_anything_fast")
+    from pathlib import PosixPath
+    saved_configs = PosixPath(os.path.dirname(__file__))
     saved_configs = saved_configs / "configs" / "flash_4_configs_a100.p"
     if not device_name.startswith('NVIDIA A100'):
         cwd = pathlib.Path.cwd()
@@ -243,8 +244,10 @@ def _load_best_configs():
 
 
 def _save_best_configs(best_configs):
-    import importlib
-    saved_configs = importlib.resources.files("segment_anything_fast")
+    # import importlib
+    # saved_configs = importlib.resources.files("segment_anything_fast")
+    from pathlib import PosixPath
+    saved_configs = PosixPath(os.path.dirname(__file__))
     saved_configs = saved_configs / "configs" / "flash_4_configs_a100.p"
     device_name = torch.cuda.get_device_name()
     if not device_name.startswith('NVIDIA A100'):
@@ -329,7 +332,7 @@ def _attention_rel_h_rel_w_kernel_aligned(q, k, v, rel_h_w, sm_scale):
     return o
 
 
-USE_CUSTOM_KERNEL = bool(int(os.environ.get('SEGMENT_ANYTHING_FAST_USE_FLASH_4', 1)))
+USE_CUSTOM_KERNEL = bool(int(os.environ.get('SEGMENT_ANYTHING_FAST_USE_FLASH_4', 0)))
 
 
 def _attention_rel_h_rel_w(q_, k_, v_, rel_h_, rel_w_):

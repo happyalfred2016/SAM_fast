@@ -113,14 +113,14 @@ class MaskDecoder(nn.Module):
 
         # Select the correct mask or masks for output
         if multimask_output:
-            mask_slice = slice(1, None)
+            mask_slice = slice(0, None)
         else:
             mask_slice = slice(0, 1)
         masks = masks[:, mask_slice, :, :]
         iou_pred = iou_pred[:, mask_slice]
 
         if sparse_prompt_embeddings.is_nested:
-            return masks, iou_pred, offsets
+            raise NotImplementedError
 
         if sparse_prompt_embeddings.dtype != self_dtype:
             return masks.to(sparse_prompt_embeddings.dtype), iou_pred.to(sparse_prompt_embeddings.dtype)

@@ -4,6 +4,12 @@ This work is based on a fork of https://github.com/facebookresearch/segment-anyt
 
 The corresponding blog post is https://pytorch.org/blog/accelerating-generative-ai/
 
+## Modifications
+In this fork I have make some modifications for being used as a submodule in multi-class segmentation:
+1. fix path issue
+2. output full segmentation mask in mask decoder
+3. disable triton kernel by default (causing erros)
+
 
 ## Installation
 
