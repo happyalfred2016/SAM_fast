@@ -16,14 +16,21 @@ class MLPBlock(nn.Module):
         embedding_dim: int,
         mlp_dim: int,
         act: Type[nn.Module] = nn.GELU,
+        dropout=0.,
     ) -> None:
         super().__init__()
         self.lin1 = nn.Linear(embedding_dim, mlp_dim)
         self.lin2 = nn.Linear(mlp_dim, embedding_dim)
         self.act = act()
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.lin2(self.act(self.lin1(x)))
+        x = self.lin1(x)
+        x = self.act(x)
+        x = self.dropout(x)
+        x = self.lin2(x)
+        x = self.dropout(x)
+        return x
 
 
 # From https://github.com/facebookresearch/detectron2/blob/main/detectron2/layers/batch_norm.py # noqa

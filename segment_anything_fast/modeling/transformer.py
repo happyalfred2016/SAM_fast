@@ -22,6 +22,7 @@ class TwoWayTransformer(nn.Module):
         mlp_dim: int,
         activation: Type[nn.Module] = nn.ReLU,
         attention_downsample_rate: int = 2,
+        dropout=0.,
     ) -> None:
         """
         A transformer decoder that attends to an input image using
@@ -51,11 +52,12 @@ class TwoWayTransformer(nn.Module):
                     activation=activation,
                     attention_downsample_rate=attention_downsample_rate,
                     skip_first_layer_pe=(i == 0),
+                    dropout=dropout,
                 )
             )
 
         self.final_attn_token_to_image = Attention(
-            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate, dropout=dropout
         )
         self.norm_final_attn = nn.LayerNorm(embedding_dim)
 
@@ -114,6 +116,7 @@ class TwoWayAttentionBlock(nn.Module):
         activation: Type[nn.Module] = nn.ReLU,
         attention_downsample_rate: int = 2,
         skip_first_layer_pe: bool = False,
+        dropout=0.,
     ) -> None:
         """
         A transformer block with four layers: (1) self-attention of sparse
@@ -129,20 +132,20 @@ class TwoWayAttentionBlock(nn.Module):
           skip_first_layer_pe (bool): skip the PE on the first layer
         """
         super().__init__()
-        self.self_attn = Attention(embedding_dim, num_heads)
+        self.self_attn = Attention(embedding_dim, num_heads, dropout=dropout)
         self.norm1 = nn.LayerNorm(embedding_dim)
 
         self.cross_attn_token_to_image = Attention(
-            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate, dropout=dropout
         )
         self.norm2 = nn.LayerNorm(embedding_dim)
 
-        self.mlp = MLPBlock(embedding_dim, mlp_dim, activation)
+        self.mlp = MLPBlock(embedding_dim, mlp_dim, activation, dropout=dropout)
         self.norm3 = nn.LayerNorm(embedding_dim)
 
         self.norm4 = nn.LayerNorm(embedding_dim)
         self.cross_attn_image_to_token = Attention(
-            embedding_dim, num_heads, downsample_rate=attention_downsample_rate
+            embedding_dim, num_heads, downsample_rate=attention_downsample_rate, dropout=dropout
         )
 
         self.skip_first_layer_pe = skip_first_layer_pe
@@ -192,11 +195,13 @@ class Attention(nn.Module):
         embedding_dim: int,
         num_heads: int,
         downsample_rate: int = 1,
+        dropout=0.,
     ) -> None:
         super().__init__()
         self.embedding_dim = embedding_dim
         self.internal_dim = embedding_dim // downsample_rate
         self.num_heads = num_heads
+        self.dropout = dropout
         assert self.internal_dim % num_heads == 0, "num_heads must divide embedding_dim."
 
         self.q_proj = nn.Linear(embedding_dim, self.internal_dim)
@@ -224,7 +229,8 @@ class Attention(nn.Module):
         v = self._separate_heads(v, self.num_heads)
 
         # Attention
-        out = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v,
+                                                               dropout_p=(self.dropout if self.training else 0.0))
 
         # Get output
         out = self._recombine_heads(out)

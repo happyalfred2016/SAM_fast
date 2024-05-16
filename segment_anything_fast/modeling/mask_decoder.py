@@ -15,14 +15,15 @@ from .common import LayerNorm2d
 
 class MaskDecoder(nn.Module):
     def __init__(
-        self,
-        *,
-        transformer_dim: int,
-        transformer: nn.Module,
-        num_multimask_outputs: int = 3,
-        activation: Type[nn.Module] = nn.GELU,
-        iou_head_depth: int = 3,
-        iou_head_hidden_dim: int = 256,
+            self,
+            *,
+            transformer_dim: int,
+            transformer: nn.Module,
+            num_multimask_outputs: int = 3,
+            activation: Type[nn.Module] = nn.GELU,
+            iou_head_depth: int = 3,
+            iou_head_hidden_dim: int = 256,
+            dropout=0.,
     ) -> None:
         """
         Predicts masks given an image and prompt embeddings, using a
@@ -56,25 +57,26 @@ class MaskDecoder(nn.Module):
             activation(),
             nn.ConvTranspose2d(transformer_dim // 4, transformer_dim // 8, kernel_size=2, stride=2),
             activation(),
+            nn.Dropout2d(dropout),
         )
         self.output_hypernetworks_mlps = nn.ModuleList(
             [
-                MLP(transformer_dim, transformer_dim, transformer_dim // 8, 3)
+                MLP(transformer_dim, transformer_dim, transformer_dim // 8, 3, dropout=dropout)
                 for i in range(self.num_mask_tokens)
             ]
         )
 
         self.iou_prediction_head = MLP(
-            transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
+            transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth, dropout=dropout
         )
 
     def forward(
-        self,
-        image_embeddings: torch.Tensor,
-        image_pe: torch.Tensor,
-        sparse_prompt_embeddings: torch.Tensor,
-        dense_prompt_embeddings: torch.Tensor,
-        multimask_output: bool,
+            self,
+            image_embeddings: torch.Tensor,
+            image_pe: torch.Tensor,
+            sparse_prompt_embeddings: torch.Tensor,
+            dense_prompt_embeddings: torch.Tensor,
+            multimask_output: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Predict masks given image and prompt embeddings.
@@ -128,11 +130,11 @@ class MaskDecoder(nn.Module):
         return masks, iou_pred
 
     def predict_masks(
-        self,
-        image_embeddings: torch.Tensor,
-        image_pe: torch.Tensor,
-        sparse_prompt_embeddings: torch.Tensor,
-        dense_prompt_embeddings: torch.Tensor,
+            self,
+            image_embeddings: torch.Tensor,
+            image_pe: torch.Tensor,
+            sparse_prompt_embeddings: torch.Tensor,
+            dense_prompt_embeddings: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
@@ -149,7 +151,7 @@ class MaskDecoder(nn.Module):
         # Run the transformer
         hs, src = self.transformer(src, pos_src, tokens)
         iou_token_out = hs[:, 0, :]
-        mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :]
+        mask_tokens_out = hs[:, 1: (1 + self.num_mask_tokens), :]
 
         # Upscale mask embeddings and predict masks using the mask tokens
         src = src.transpose(1, 2).view(b, c, h, w)
@@ -167,17 +169,17 @@ class MaskDecoder(nn.Module):
         return masks, iou_pred
 
     def predict_masks_nested(
-        self,
-        image_embeddings: torch.Tensor,
-        image_pe: torch.Tensor,
-        sparse_prompt_embeddings: torch.Tensor,
-        dense_prompt_embeddings: torch.Tensor,
+            self,
+            image_embeddings: torch.Tensor,
+            image_pe: torch.Tensor,
+            sparse_prompt_embeddings: torch.Tensor,
+            dense_prompt_embeddings: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Predicts masks. See 'forward' for more details."""
         # Concatenate output tokens
         output_tokens = (
-            torch.zeros_like(sparse_prompt_embeddings).prod(dim=2, keepdim=True) +
-            torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0))
+                torch.zeros_like(sparse_prompt_embeddings).prod(dim=2, keepdim=True) +
+                torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0))
         tokens = torch.cat([output_tokens, sparse_prompt_embeddings], dim=2)
 
         src = dense_prompt_embeddings + image_embeddings.unsqueeze(1)
@@ -187,7 +189,7 @@ class MaskDecoder(nn.Module):
         # Run the transformer
         hs, src = self.transformer(src, pos_src, tokens)
         iou_token_out = hs[..., 0, :]
-        mask_tokens_out = hs[..., 1 : (1 + self.num_mask_tokens), :]
+        mask_tokens_out = hs[..., 1: (1 + self.num_mask_tokens), :]
 
         # Upscale mask embeddings and predict masks using the mask tokens
         src = src.transpose(-2, -1).unflatten(-1, (h, w))
@@ -209,12 +211,13 @@ class MaskDecoder(nn.Module):
 # https://github.com/facebookresearch/MaskFormer/blob/main/mask_former/modeling/transformer/transformer_predictor.py # noqa
 class MLP(nn.Module):
     def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int,
-        output_dim: int,
-        num_layers: int,
-        sigmoid_output: bool = False,
+            self,
+            input_dim: int,
+            hidden_dim: int,
+            output_dim: int,
+            num_layers: int,
+            sigmoid_output: bool = False,
+            dropout=0.,
     ) -> None:
         super().__init__()
         self.num_layers = num_layers
@@ -223,10 +226,11 @@ class MLP(nn.Module):
             nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
         )
         self.sigmoid_output = sigmoid_output
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         for i, layer in enumerate(self.layers):
-            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+            x = self.dropout(F.relu(layer(x))) if i < self.num_layers - 1 else layer(x)
         if self.sigmoid_output:
             x = F.sigmoid(x)
         return x

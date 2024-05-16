@@ -14,26 +14,28 @@ from .common import LayerNorm2d, MLPBlock
 
 from ..flash_4 import _attention_rel_h_rel_w
 
+
 # This class and its supporting functions below lightly adapted from the ViTDet backbone available at: https://github.com/facebookresearch/detectron2/blob/main/detectron2/modeling/backbone/vit.py # noqa
 class ImageEncoderViT(nn.Module):
     def __init__(
-        self,
-        img_size: int = 1024,
-        patch_size: int = 16,
-        in_chans: int = 3,
-        embed_dim: int = 768,
-        depth: int = 12,
-        num_heads: int = 12,
-        mlp_ratio: float = 4.0,
-        out_chans: int = 256,
-        qkv_bias: bool = True,
-        norm_layer: Type[nn.Module] = nn.LayerNorm,
-        act_layer: Type[nn.Module] = nn.GELU,
-        use_abs_pos: bool = True,
-        use_rel_pos: bool = False,
-        rel_pos_zero_init: bool = True,
-        window_size: int = 0,
-        global_attn_indexes: Tuple[int, ...] = (),
+            self,
+            img_size: int = 1024,
+            patch_size: int = 16,
+            in_chans: int = 3,
+            embed_dim: int = 768,
+            depth: int = 12,
+            num_heads: int = 12,
+            mlp_ratio: float = 4.0,
+            out_chans: int = 256,
+            qkv_bias: bool = True,
+            norm_layer: Type[nn.Module] = nn.LayerNorm,
+            act_layer: Type[nn.Module] = nn.GELU,
+            use_abs_pos: bool = True,
+            use_rel_pos: bool = False,
+            rel_pos_zero_init: bool = True,
+            window_size: int = 0,
+            global_attn_indexes: Tuple[int, ...] = (),
+            dropout=0.,
     ) -> None:
         """
         Args:
@@ -83,6 +85,7 @@ class ImageEncoderViT(nn.Module):
                 rel_pos_zero_init=rel_pos_zero_init,
                 window_size=window_size if i not in global_attn_indexes else 0,
                 input_size=(img_size // patch_size, img_size // patch_size),
+                dropout=dropout,
             )
             self.blocks.append(block)
 
@@ -102,6 +105,7 @@ class ImageEncoderViT(nn.Module):
                 bias=False,
             ),
             LayerNorm2d(out_chans),
+            nn.Dropout2d(dropout)
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -121,17 +125,18 @@ class Block(nn.Module):
     """Transformer blocks with support of window attention and residual propagation blocks"""
 
     def __init__(
-        self,
-        dim: int,
-        num_heads: int,
-        mlp_ratio: float = 4.0,
-        qkv_bias: bool = True,
-        norm_layer: Type[nn.Module] = nn.LayerNorm,
-        act_layer: Type[nn.Module] = nn.GELU,
-        use_rel_pos: bool = False,
-        rel_pos_zero_init: bool = True,
-        window_size: int = 0,
-        input_size: Optional[Tuple[int, int]] = None,
+            self,
+            dim: int,
+            num_heads: int,
+            mlp_ratio: float = 4.0,
+            qkv_bias: bool = True,
+            norm_layer: Type[nn.Module] = nn.LayerNorm,
+            act_layer: Type[nn.Module] = nn.GELU,
+            use_rel_pos: bool = False,
+            rel_pos_zero_init: bool = True,
+            window_size: int = 0,
+            input_size: Optional[Tuple[int, int]] = None,
+            dropout=0.,
     ) -> None:
         """
         Args:
@@ -157,10 +162,11 @@ class Block(nn.Module):
             use_rel_pos=use_rel_pos,
             rel_pos_zero_init=rel_pos_zero_init,
             input_size=input_size if window_size == 0 else (window_size, window_size),
+            dropout=dropout,
         )
 
         self.norm2 = norm_layer(dim)
-        self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer)
+        self.mlp = MLPBlock(embedding_dim=dim, mlp_dim=int(dim * mlp_ratio), act=act_layer, dropout=dropout)
 
         self.window_size = window_size
 
@@ -187,13 +193,14 @@ class Attention(nn.Module):
     """Multi-head Attention block with relative position embeddings."""
 
     def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        qkv_bias: bool = True,
-        use_rel_pos: bool = False,
-        rel_pos_zero_init: bool = True,
-        input_size: Optional[Tuple[int, int]] = None,
+            self,
+            dim: int,
+            num_heads: int = 8,
+            qkv_bias: bool = True,
+            use_rel_pos: bool = False,
+            rel_pos_zero_init: bool = True,
+            input_size: Optional[Tuple[int, int]] = None,
+            dropout=0.,
     ) -> None:
         """
         Args:
@@ -208,7 +215,8 @@ class Attention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = head_dim**-0.5
+        self.scale = head_dim ** -0.5
+        self.dropout = dropout
 
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.proj = nn.Linear(dim, dim)
@@ -216,7 +224,7 @@ class Attention(nn.Module):
         self.use_rel_pos = use_rel_pos
         if self.use_rel_pos:
             assert (
-                input_size is not None
+                    input_size is not None
             ), "Input size must be provided if using relative positional encoding."
             # initialize relative positional embeddings
             self.rel_pos_h = nn.Parameter(torch.zeros(2 * input_size[0] - 1, head_dim))
@@ -242,9 +250,10 @@ class Attention(nn.Module):
             rel_w = rel_w.view(B, self.num_heads, rel_w.size(1), rel_w.size(2), rel_w.size(3))
             # attn_bias = (rel_h + rel_w).view(B, self.num_heads, rel_h.size(2), rel_h.size(3) * rel_w.size(4))
             # x = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=attn_bias)
-            x = _attention_rel_h_rel_w(q, k, v, rel_h, rel_w)
+            x = _attention_rel_h_rel_w(q, k, v, rel_h, rel_w, dropout_p=(self.dropout if self.training else 0.0))
         else:
-            x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+            x = torch.nn.functional.scaled_dot_product_attention(q, k, v,
+                                                                 dropout_p=(self.dropout if self.training else 0.0))
 
         x = x.view(B, self.num_heads, H, W, -1).permute(0, 2, 3, 1, 4).reshape(B, H, W, -1)
 
@@ -278,7 +287,7 @@ def window_partition(x: torch.Tensor, window_size: int) -> Tuple[torch.Tensor, T
 
 
 def window_unpartition(
-    windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int], hw: Tuple[int, int]
+        windows: torch.Tensor, window_size: int, pad_hw: Tuple[int, int], hw: Tuple[int, int]
 ) -> torch.Tensor:
     """
     Window unpartition into original sequences and removing padding.
@@ -336,11 +345,11 @@ def get_rel_pos(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor
 
 
 def add_decomposed_rel_pos(
-    q: torch.Tensor,
-    rel_pos_h: torch.Tensor,
-    rel_pos_w: torch.Tensor,
-    q_size: Tuple[int, int],
-    k_size: Tuple[int, int],
+        q: torch.Tensor,
+        rel_pos_h: torch.Tensor,
+        rel_pos_w: torch.Tensor,
+        q_size: Tuple[int, int],
+        k_size: Tuple[int, int],
 ) -> torch.Tensor:
     """
     Calculate decomposed Relative Positional Embeddings from :paper:`mvitv2`.
@@ -379,12 +388,12 @@ class PatchEmbed(nn.Module):
     """
 
     def __init__(
-        self,
-        kernel_size: Tuple[int, int] = (16, 16),
-        stride: Tuple[int, int] = (16, 16),
-        padding: Tuple[int, int] = (0, 0),
-        in_chans: int = 3,
-        embed_dim: int = 768,
+            self,
+            kernel_size: Tuple[int, int] = (16, 16),
+            stride: Tuple[int, int] = (16, 16),
+            padding: Tuple[int, int] = (0, 0),
+            in_chans: int = 3,
+            embed_dim: int = 768,
     ) -> None:
         """
         Args:
